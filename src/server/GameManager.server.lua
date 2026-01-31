@@ -1,7 +1,5 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local GameConfig = require(Shared:WaitForChild("GameConfig"))
 local CharacterData = require(Shared:WaitForChild("CharacterData"))
@@ -90,6 +88,92 @@ local function getPlayerCharacter(player)
 	return gameState.playerCharacters[player]
 end
 
+local function removeCostume(player)
+	local character = player.Character
+	if not character then return end
+
+	-- Remove costume-tagged accessory parts
+	for _, child in ipairs(character:GetDescendants()) do
+		if child:IsA("BasePart") and child:GetAttribute("Costume") then
+			child:Destroy()
+		end
+	end
+
+	-- Remove custom BodyColors so default can return
+	local bc = character:FindFirstChildOfClass("BodyColors")
+	if bc and bc:GetAttribute("Costume") then
+		bc:Destroy()
+	end
+end
+
+local function applyCostume(player)
+	local charName = gameState.playerCharacters[player]
+	if not charName then return end
+	local charData = CharacterData.GetCharacter(charName)
+	if not charData then return end
+
+	local character = player.Character
+	if not character then return end
+	local head = character:FindFirstChild("Head")
+	if not head then return end
+
+	-- Clean any existing costume first
+	removeCostume(player)
+
+	-- Remove existing clothing so body color shows
+	for _, item in ipairs(character:GetChildren()) do
+		if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+			item:Destroy()
+		end
+	end
+
+	-- Remove existing BodyColors and apply character color
+	local existingBC = character:FindFirstChildOfClass("BodyColors")
+	if existingBC then
+		existingBC:Destroy()
+	end
+
+	local bodyColor = BrickColor.new(charData.BodyColor)
+	local bc = Instance.new("BodyColors")
+	bc:SetAttribute("Costume", true)
+	bc.HeadColor = bodyColor
+	bc.LeftArmColor = bodyColor
+	bc.RightArmColor = bodyColor
+	bc.TorsoColor = bodyColor
+	bc.LeftLegColor = bodyColor
+	bc.RightLegColor = bodyColor
+	bc.Parent = character
+
+	-- Build accessory parts and weld to head
+	if charData.Accessories then
+		for _, acc in ipairs(charData.Accessories) do
+			local part = Instance.new("Part")
+			part.Name = acc.Name
+			part.Size = acc.Size
+			part.Color = acc.Color
+			part.Material = Enum.Material.SmoothPlastic
+			part.CanCollide = false
+			part.Massless = true
+			part:SetAttribute("Costume", true)
+
+			if acc.Shape then
+				part.Shape = acc.Shape
+			end
+
+			-- Position relative to head then weld
+			part.CFrame = head.CFrame * acc.Offset
+
+			local weld = Instance.new("Weld")
+			weld.Part0 = head
+			weld.Part1 = part
+			weld.C0 = acc.Offset
+			weld.Parent = part
+
+			part.Parent = character
+		end
+	end
+end
+
 local function broadcastSlots()
 	characterSlotsRemote:FireAllClients(gameState.characterSlots)
 end
@@ -125,16 +209,8 @@ local function assignCharacter(player, characterName)
 		humanoid.WalkSpeed = charData.WalkSpeed
 	end
 
-	-- Apply character color
-	if player.Character then
-		for _, part in ipairs(player.Character:GetDescendants()) do
-			if part:IsA("BasePart") and part.Name == "HumanoidRootPart" then
-				-- Don't color the root part
-			elseif part:IsA("Shirt") or part:IsA("Pants") then
-				-- Leave clothing alone
-			end
-		end
-	end
+	-- Apply costume (body color + accessories)
+	applyCostume(player)
 
 	broadcastSlots()
 	return true
@@ -243,7 +319,7 @@ Players.PlayerAdded:Connect(function(player)
 	gameState.playerScores[player] = 0
 
 	player.CharacterAdded:Connect(function(character)
-		-- Apply character stats if already selected
+		-- Apply character stats and costume if already selected
 		local charName = gameState.playerCharacters[player]
 		if charName then
 			local charData = CharacterData.GetCharacter(charName)
@@ -251,8 +327,9 @@ Players.PlayerAdded:Connect(function(player)
 				local humanoid = character:WaitForChild("Humanoid")
 				humanoid.WalkSpeed = charData.WalkSpeed
 			end
-			-- Teleport after short delay to ensure character is loaded
+			-- Wait for character to fully load before applying costume
 			wait(0.5)
+			applyCostume(player)
 			teleportToSpawn(player)
 		end
 	end)
@@ -294,39 +371,6 @@ selectCharacterRemote.OnServerEvent:Connect(function(player, characterName)
 	end
 end)
 
--- Expose functions for CharacterAbilities to use
-local GameManagerModule = Instance.new("ModuleScript")
-GameManagerModule.Name = "GameManagerAPI"
-GameManagerModule.Source = [[
-local API = {}
-local addScoreFunc
-local getCharFunc
-local isRoundActiveFunc
-
-function API._init(addScoreFn, getCharFn, isRoundActiveFn)
-	addScoreFunc = addScoreFn
-	getCharFunc = getCharFn
-	isRoundActiveFunc = isRoundActiveFn
-end
-
-function API.AddScore(player, amount)
-	if addScoreFunc then addScoreFunc(player, amount) end
-end
-
-function API.GetPlayerCharacter(player)
-	if getCharFunc then return getCharFunc(player) end
-	return nil
-end
-
-function API.IsRoundActive()
-	if isRoundActiveFunc then return isRoundActiveFunc() end
-	return false
-end
-
-return API
-]]
-GameManagerModule.Parent = Shared
-
 -- Initialize the API bindable
 local apiBindable = Instance.new("BindableFunction")
 apiBindable.Name = "AddScore"
@@ -349,30 +393,14 @@ isRoundActiveBindable.OnInvoke = function()
 end
 isRoundActiveBindable.Parent = remotes
 
--- Round timer tick
-local roundTickAccumulator = 0
-RunService.Heartbeat:Connect(function(dt)
-	if gameState.roundActive then
-		roundTickAccumulator = roundTickAccumulator + dt
-		if roundTickAccumulator >= 1 then
-			roundTickAccumulator = roundTickAccumulator - 1
-			gameState.roundTimeLeft = gameState.roundTimeLeft - 1
-
-			roundInfoRemote:FireAllClients("TimeUpdate", {
-				TimeLeft = gameState.roundTimeLeft,
-			})
-
-			if gameState.roundTimeLeft <= 0 then
-				endRound()
-			end
-		end
-	end
-end)
+-- Round timer tick (runs inside game loop below)
 
 -- Main game loop
 spawn(function()
 	-- Wait for map to build
 	wait(3)
+
+	local firstRound = true
 
 	while true do
 		-- Wait for minimum players
@@ -384,12 +412,46 @@ spawn(function()
 			wait(3)
 		end
 
-		intermission()
-		startRound()
+		if firstRound then
+			-- On first round, wait for at least one player to pick a character
+			roundInfoRemote:FireAllClients("Intermission", {
+				Duration = 0,
+			})
+			while true do
+				local anySelected = false
+				for _, p in ipairs(Players:GetPlayers()) do
+					if gameState.playerCharacters[p] then
+						anySelected = true
+						break
+					end
+				end
+				if anySelected then break end
+				wait(0.5)
+			end
+			-- Brief countdown after first selection
+			wait(3)
+			firstRound = false
+		else
+			intermission()
+		end
 
-		-- Wait for round to end
+		print("[GameManager] Starting round...")
+		startRound()
+		print("[GameManager] Round active: " .. tostring(gameState.roundActive) .. ", time: " .. gameState.roundTimeLeft)
+
+		-- Round timer
 		while gameState.roundActive do
 			wait(1)
+			gameState.roundTimeLeft = gameState.roundTimeLeft - 1
+
+			print("[GameManager] Timer: " .. gameState.roundTimeLeft)
+			roundInfoRemote:FireAllClients("TimeUpdate", {
+				TimeLeft = gameState.roundTimeLeft,
+			})
+
+			if gameState.roundTimeLeft <= 0 then
+				endRound()
+			end
 		end
 
 		wait(5) -- Show scores for 5 seconds
