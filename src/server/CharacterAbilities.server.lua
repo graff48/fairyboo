@@ -16,15 +16,18 @@ local isRoundActiveBindable = remotes:WaitForChild("IsRoundActive")
 
 -- Helper functions
 local function addScore(player, amount)
+	print("[CharacterAbilities] addScore called for " .. player.Name .. ": +" .. amount)
 	addScoreBindable:Invoke(player, amount)
 end
 
 local function getPlayerCharacter(player)
-	return getCharBindable:Invoke(player)
+	local char = getCharBindable:Invoke(player)
+	return char
 end
 
 local function isRoundActive()
-	return isRoundActiveBindable:Invoke()
+	local active = isRoundActiveBindable:Invoke()
+	return active
 end
 
 local function getPlayerRoot(player)
@@ -440,39 +443,212 @@ spawn(function()
 		end
 	end
 
-	-- Bear patrol NPC
-	local bearModel = Utils.CreateModel("Bear", bearsHouse)
-	local bearBody = Utils.CreatePart({
-		Name = "BearBody",
-		Size = Vector3.new(4, 6, 3),
-		Position = GameConfig.MapPositions.BearsHouse + Vector3.new(0, 50, 0), -- Start hidden above
-		BrickColor = BrickColor.new("Brown"),
-		Material = Enum.Material.SmoothPlastic,
-		CanCollide = true,
-		Parent = bearModel,
-	})
-	Utils.CreateBillboardGui(bearBody, "Papa Bear", Color3.new(0.5, 0.3, 0.1))
+	-- Bear family NPCs
+	local housePos = GameConfig.MapPositions.BearsHouse
+	local bearActive = false -- true when bears are inside the house
+	local bearBodies = {}
 
-	local bearActive = false
-	local bearPatrolPoints = {}
-	local patrolFolder = bearsHouse:FindFirstChild("BearPatrolPoints")
-	if patrolFolder then
-		for _, point in ipairs(patrolFolder:GetChildren()) do
-			table.insert(bearPatrolPoints, point.Position)
+	-- Create bear models
+	for i, bearDef in ipairs(GameConfig.Bears) do
+		local bearModel = Utils.CreateModel(bearDef.Name, map)
+
+		-- Body
+		local body = Utils.CreatePart({
+			Name = "Body",
+			Size = bearDef.Size,
+			Position = housePos + Vector3.new(-20 + (i - 1) * 20, bearDef.Size.Y / 2, 25),
+			BrickColor = bearDef.Color,
+			Material = Enum.Material.SmoothPlastic,
+			CanCollide = true,
+			Parent = bearModel,
+		})
+
+		-- Head
+		local head = Utils.CreatePart({
+			Name = "Head",
+			Size = Vector3.new(bearDef.HeadSize, bearDef.HeadSize, bearDef.HeadSize),
+			Position = body.Position + Vector3.new(0, bearDef.Size.Y / 2 + bearDef.HeadSize / 2, -bearDef.Size.Z / 2 + 0.5),
+			BrickColor = bearDef.Color,
+			Material = Enum.Material.SmoothPlastic,
+			Shape = Enum.PartType.Ball,
+			CanCollide = false,
+			Parent = bearModel,
+		})
+
+		-- Ears
+		for _, side in ipairs({-1, 1}) do
+			Utils.CreatePart({
+				Name = "Ear",
+				Size = Vector3.new(bearDef.HeadSize * 0.4, bearDef.HeadSize * 0.4, bearDef.HeadSize * 0.3),
+				Position = head.Position + Vector3.new(side * bearDef.HeadSize * 0.5, bearDef.HeadSize * 0.35, 0),
+				BrickColor = bearDef.Color,
+				Material = Enum.Material.SmoothPlastic,
+				Shape = Enum.PartType.Ball,
+				CanCollide = false,
+				Parent = bearModel,
+			})
 		end
+
+		-- Snout
+		Utils.CreatePart({
+			Name = "Snout",
+			Size = Vector3.new(bearDef.HeadSize * 0.5, bearDef.HeadSize * 0.35, bearDef.HeadSize * 0.4),
+			Position = head.Position + Vector3.new(0, -bearDef.HeadSize * 0.15, -bearDef.HeadSize * 0.45),
+			BrickColor = BrickColor.new("Nougat"),
+			Material = Enum.Material.SmoothPlastic,
+			CanCollide = false,
+			Parent = bearModel,
+		})
+
+		-- Legs (4 legs)
+		for _, offset in ipairs({
+			Vector3.new(-bearDef.Size.X * 0.3, 0, -bearDef.Size.Z * 0.25),
+			Vector3.new(bearDef.Size.X * 0.3, 0, -bearDef.Size.Z * 0.25),
+			Vector3.new(-bearDef.Size.X * 0.3, 0, bearDef.Size.Z * 0.25),
+			Vector3.new(bearDef.Size.X * 0.3, 0, bearDef.Size.Z * 0.25),
+		}) do
+			Utils.CreatePart({
+				Name = "Leg",
+				Size = Vector3.new(bearDef.Size.X * 0.25, bearDef.Size.Y * 0.3, bearDef.Size.Z * 0.25),
+				Position = body.Position + offset + Vector3.new(0, -bearDef.Size.Y * 0.5 - bearDef.Size.Y * 0.1, 0),
+				BrickColor = bearDef.Color,
+				Material = Enum.Material.SmoothPlastic,
+				CanCollide = false,
+				Parent = bearModel,
+			})
+		end
+
+		Utils.CreateBillboardGui(head, bearDef.Name, Color3.fromRGB(180, 120, 60))
+
+		table.insert(bearBodies, {
+			Model = bearModel,
+			Body = body,
+			Def = bearDef,
+		})
 	end
 
-	-- Bear patrol cycle
+	-- Move all parts of a bear model to a new position smoothly
+	local function moveBear(bear, targetPos, dt)
+		local body = bear.Body
+		local currentPos = body.Position
+		local direction = targetPos - currentPos
+		local flatDirection = Vector3.new(direction.X, 0, direction.Z)
+		local dist = flatDirection.Magnitude
+
+		if dist < 1 then return true end -- arrived
+
+		local moveSpeed = GameConfig.Goldilocks.BearMoveSpeed * dt
+		local step = flatDirection.Unit * math.min(moveSpeed, dist)
+		local newPos = currentPos + step
+
+		-- Calculate offset from body to move all parts together
+		local delta = newPos - currentPos
+		for _, part in ipairs(bear.Model:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Position = part.Position + delta
+			end
+		end
+
+		-- Face movement direction
+		local lookTarget = currentPos + flatDirection
+		local lookCFrame = CFrame.lookAt(body.Position, Vector3.new(lookTarget.X, body.Position.Y, lookTarget.Z))
+		-- We just move parts, no CFrame rotation for simplicity with multi-part models
+
+		return false -- not arrived yet
+	end
+
+	-- Pick a random roam target near the house or around the map
+	local function getRandomRoamTarget(isReturning)
+		if isReturning then
+			-- Go back inside the house
+			return housePos + Vector3.new(math.random(-6, 6), 0, math.random(-6, 6))
+		end
+
+		-- Roam around the map near the Bears' House area
+		local roamRadius = GameConfig.Goldilocks.BearRoamRadius
+		local roamTargets = {
+			-- Near the house
+			housePos + Vector3.new(math.random(-20, 20), 0, math.random(15, 30)),
+			-- Toward village
+			housePos + Vector3.new(math.random(-30, 30), 0, math.random(40, roamRadius)),
+			-- Garden area
+			housePos + Vector3.new(math.random(-roamRadius, roamRadius), 0, math.random(-20, 20)),
+			-- Near the path
+			GameConfig.MapPositions.VillageCenter + Vector3.new(math.random(-20, 20), 0, math.random(-40, -20)),
+		}
+		return roamTargets[math.random(#roamTargets)]
+	end
+
+	-- Each bear gets its own roam loop
+	for i, bear in ipairs(bearBodies) do
+		spawn(function()
+			local target = getRandomRoamTarget(false)
+			local groundY = bear.Def.Size.Y / 2
+			target = Vector3.new(target.X, groundY, target.Z)
+
+			local timeSinceRoamStart = 0
+			local isHome = false
+			local homeTimer = 0
+
+			while true do
+				local dt = wait(0.1)
+				if not isRoundActive() then continue end
+
+				-- Move toward current target
+				local arrived = moveBear(bear, target, dt)
+
+				if arrived then
+					-- Idle briefly before picking new target
+					wait(math.random(2, 5))
+
+					if bearActive then
+						-- Bears are home cycle: roam inside the house
+						if not isHome then
+							target = housePos + Vector3.new(math.random(-6, 6), groundY, math.random(-6, 6))
+							isHome = true
+						else
+							-- Roam within house
+							target = housePos + Vector3.new(math.random(-8, 8), groundY, math.random(-6, 6))
+						end
+					else
+						isHome = false
+						target = getRandomRoamTarget(false)
+						target = Vector3.new(target.X, groundY, target.Z)
+					end
+				end
+
+				-- Check for Goldilocks players nearby (only when bears are home/active)
+				if bearActive then
+					for _, player in ipairs(Players:GetPlayers()) do
+						if getPlayerCharacter(player) == "Goldilocks" then
+							local root = getPlayerRoot(player)
+							if root then
+								local dist = Utils.DistanceBetween(root.Position, bear.Body.Position)
+								if dist < GameConfig.Goldilocks.BearDetectionRadius then
+									root.CFrame = CFrame.new(housePos + Vector3.new(0, 5, 20))
+									updateHUDRemote:FireClient(player, "AbilityFeedback", {
+										Message = bear.Def.Name .. " found you! Kicked out!",
+									})
+								end
+							end
+						end
+					end
+				end
+			end
+		end)
+	end
+
+	-- Bear home/away cycle: bears periodically return to the house
 	spawn(function()
 		while true do
+			-- Bears are out roaming
 			wait(GameConfig.Goldilocks.BearReturnInterval)
 			if not isRoundActive() then continue end
 
-			-- Bear appears
+			-- Bears coming home
 			bearActive = true
-			local housePos = GameConfig.MapPositions.BearsHouse
+			print("[Bears] The bears are coming home!")
 
-			-- Announce bear return
 			for _, player in ipairs(Players:GetPlayers()) do
 				if getPlayerCharacter(player) == "Goldilocks" then
 					updateHUDRemote:FireClient(player, "AbilityFeedback", {
@@ -481,35 +657,18 @@ spawn(function()
 				end
 			end
 
-			-- Patrol
-			for i = 1, #bearPatrolPoints * 2 do
-				if not isRoundActive() then break end
-				local target = bearPatrolPoints[((i - 1) % #bearPatrolPoints) + 1]
-				bearBody.Position = target + Vector3.new(0, 3, 0)
-
-				-- Check if any Goldilocks is nearby and not hidden
-				for _, player in ipairs(Players:GetPlayers()) do
-					if getPlayerCharacter(player) == "Goldilocks" then
-						local root = getPlayerRoot(player)
-						if root then
-							local dist = Utils.DistanceBetween(root.Position, bearBody.Position)
-							if dist < 10 then
-								-- Caught! Teleport out
-								root.CFrame = CFrame.new(housePos + Vector3.new(0, 5, 15))
-								updateHUDRemote:FireClient(player, "AbilityFeedback", {
-									Message = "The bears found you! Kicked out!",
-								})
-							end
-						end
-					end
-				end
-
-				wait(GameConfig.Goldilocks.BearPatrolDuration / (#bearPatrolPoints * 2))
+			-- Move all bears toward the house
+			for _, bear in ipairs(bearBodies) do
+				local groundY = bear.Def.Size.Y / 2
+				-- The roam loops will pick house-interior targets since bearActive is true
 			end
 
-			-- Bear leaves
-			bearBody.Position = housePos + Vector3.new(0, 50, 0)
+			-- Stay home for patrol duration
+			wait(GameConfig.Goldilocks.BearPatrolDuration)
+
+			-- Bears leave again
 			bearActive = false
+			print("[Bears] The bears are leaving again.")
 
 			for _, player in ipairs(Players:GetPlayers()) do
 				if getPlayerCharacter(player) == "Goldilocks" then
@@ -710,9 +869,6 @@ Players.PlayerRemoving:Connect(function(player)
 	redTripState[player] = nil
 	goldilocksProgress[player] = nil
 end)
-
--- Reset Goldilocks progress on new round
-remotes:WaitForChild("RoundInfo").OnClientEvent = nil -- Server doesn't listen to client events on this
 
 -- Listen for round resets via roundActive changing
 spawn(function()
