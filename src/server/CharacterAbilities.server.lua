@@ -447,6 +447,7 @@ spawn(function()
 	local housePos = GameConfig.MapPositions.BearsHouse
 	local bearActive = false -- true when bears are inside the house
 	local bearBodies = {}
+	local bearTouchCooldowns = {} -- [player][bearIndex] = tick()
 
 	-- Create bear models
 	for i, bearDef in ipairs(GameConfig.Bears) do
@@ -617,20 +618,34 @@ spawn(function()
 					end
 				end
 
-				-- Check for Goldilocks players nearby (only when bears are home/active)
-				if bearActive then
-					for _, player in ipairs(Players:GetPlayers()) do
-						if getPlayerCharacter(player) == "Goldilocks" then
-							local root = getPlayerRoot(player)
-							if root then
-								local dist = Utils.DistanceBetween(root.Position, bear.Body.Position)
-								if dist < GameConfig.Goldilocks.BearDetectionRadius then
-									root.CFrame = CFrame.new(housePos + Vector3.new(0, 5, 20))
-									updateHUDRemote:FireClient(player, "AbilityFeedback", {
-										Message = bear.Def.Name .. " found you! Kicked out!",
-									})
-								end
-							end
+				-- Check for players nearby
+				for _, player in ipairs(Players:GetPlayers()) do
+					local root = getPlayerRoot(player)
+					if not root then continue end
+
+					local dist = Utils.DistanceBetween(root.Position, bear.Body.Position)
+					if dist < GameConfig.Goldilocks.BearDetectionRadius then
+						-- Goldilocks gets kicked out when bears are home
+						if bearActive and getPlayerCharacter(player) == "Goldilocks" then
+							root.CFrame = CFrame.new(housePos + Vector3.new(0, 5, 20))
+							updateHUDRemote:FireClient(player, "AbilityFeedback", {
+								Message = bear.Def.Name .. " found you! Kicked out!",
+							})
+						end
+
+						-- Point penalty for any non-bear player on touch
+						local now = tick()
+						if not bearTouchCooldowns[player] then
+							bearTouchCooldowns[player] = {}
+						end
+						local lastHit = bearTouchCooldowns[player][i]
+						if not lastHit or now - lastHit >= GameConfig.Goldilocks.BearTouchCooldown then
+							bearTouchCooldowns[player][i] = now
+							local penalty = bear.Def.TouchPenalty
+							addScore(player, -penalty)
+							updateHUDRemote:FireClient(player, "AbilityFeedback", {
+								Message = bear.Def.Name .. " got you! -" .. penalty .. " points",
+							})
 						end
 					end
 				end
@@ -723,6 +738,11 @@ spawn(function()
 			end
 		end
 	end
+
+	-- Clean up bear touch cooldowns when players leave
+	Players.PlayerRemoving:Connect(function(player)
+		bearTouchCooldowns[player] = nil
+	end)
 end)
 
 -- =============================
@@ -833,6 +853,196 @@ spawn(function()
 			wait(2) -- Brief pause between patrol cycles
 		end
 	end)
+end)
+
+-- =============================
+-- FOREST WOLF NPC
+-- =============================
+spawn(function()
+	wait(5) -- Wait for map
+	local map = workspace:WaitForChild("Map")
+
+	local wolfDef = GameConfig.WolfNPCDef
+	local wolfConfig = GameConfig.WolfNPC
+	local forestPos = GameConfig.MapPositions.ForestPath
+
+	-- Build wolf model
+	local wolfModel = Utils.CreateModel(wolfDef.Name, map)
+
+	local wolfBody = Utils.CreatePart({
+		Name = "Body",
+		Size = wolfDef.Size,
+		Position = forestPos + Vector3.new(0, wolfDef.Size.Y / 2, 0),
+		BrickColor = wolfDef.Color,
+		Material = Enum.Material.SmoothPlastic,
+		CanCollide = true,
+		Parent = wolfModel,
+	})
+
+	-- Head
+	local wolfHead = Utils.CreatePart({
+		Name = "Head",
+		Size = Vector3.new(wolfDef.HeadSize, wolfDef.HeadSize, wolfDef.HeadSize),
+		Position = wolfBody.Position + Vector3.new(0, wolfDef.Size.Y / 2 + wolfDef.HeadSize / 2, -wolfDef.Size.Z / 2 + 0.5),
+		BrickColor = wolfDef.Color,
+		Material = Enum.Material.SmoothPlastic,
+		Shape = Enum.PartType.Ball,
+		CanCollide = false,
+		Parent = wolfModel,
+	})
+
+	-- Pointed ears
+	for _, side in ipairs({-1, 1}) do
+		Utils.CreatePart({
+			Name = "Ear",
+			Size = Vector3.new(wolfDef.HeadSize * 0.25, wolfDef.HeadSize * 0.5, wolfDef.HeadSize * 0.2),
+			Position = wolfHead.Position + Vector3.new(side * wolfDef.HeadSize * 0.4, wolfDef.HeadSize * 0.45, 0),
+			BrickColor = wolfDef.Color,
+			Material = Enum.Material.SmoothPlastic,
+			CanCollide = false,
+			Parent = wolfModel,
+		})
+	end
+
+	-- Snout
+	Utils.CreatePart({
+		Name = "Snout",
+		Size = Vector3.new(wolfDef.HeadSize * 0.4, wolfDef.HeadSize * 0.3, wolfDef.HeadSize * 0.5),
+		Position = wolfHead.Position + Vector3.new(0, -wolfDef.HeadSize * 0.15, -wolfDef.HeadSize * 0.5),
+		BrickColor = BrickColor.new("Medium grey"),
+		Material = Enum.Material.SmoothPlastic,
+		CanCollide = false,
+		Parent = wolfModel,
+	})
+
+	-- Tail
+	Utils.CreatePart({
+		Name = "Tail",
+		Size = Vector3.new(0.4, 0.4, 2),
+		Position = wolfBody.Position + Vector3.new(0, wolfDef.Size.Y * 0.2, wolfDef.Size.Z / 2 + 1),
+		BrickColor = wolfDef.Color,
+		Material = Enum.Material.SmoothPlastic,
+		CanCollide = false,
+		Parent = wolfModel,
+	})
+
+	-- Four legs
+	for _, offset in ipairs({
+		Vector3.new(-wolfDef.Size.X * 0.3, 0, -wolfDef.Size.Z * 0.25),
+		Vector3.new(wolfDef.Size.X * 0.3, 0, -wolfDef.Size.Z * 0.25),
+		Vector3.new(-wolfDef.Size.X * 0.3, 0, wolfDef.Size.Z * 0.25),
+		Vector3.new(wolfDef.Size.X * 0.3, 0, wolfDef.Size.Z * 0.25),
+	}) do
+		Utils.CreatePart({
+			Name = "Leg",
+			Size = Vector3.new(wolfDef.Size.X * 0.2, wolfDef.Size.Y * 0.4, wolfDef.Size.Z * 0.15),
+			Position = wolfBody.Position + offset + Vector3.new(0, -wolfDef.Size.Y * 0.5 - wolfDef.Size.Y * 0.15, 0),
+			BrickColor = wolfDef.Color,
+			Material = Enum.Material.SmoothPlastic,
+			CanCollide = false,
+			Parent = wolfModel,
+		})
+	end
+
+	Utils.CreateBillboardGui(wolfHead, wolfDef.Name, Color3.fromRGB(100, 100, 100))
+
+	local wolf = {
+		Model = wolfModel,
+		Body = wolfBody,
+	}
+
+	-- Move wolf smoothly (same pattern as moveBear)
+	local function moveWolf(targetPos, dt)
+		local body = wolf.Body
+		local currentPos = body.Position
+		local direction = targetPos - currentPos
+		local flatDirection = Vector3.new(direction.X, 0, direction.Z)
+		local dist = flatDirection.Magnitude
+
+		if dist < 1 then return true end -- arrived
+
+		local moveSpeed = wolfConfig.MoveSpeed * dt
+		local step = flatDirection.Unit * math.min(moveSpeed, dist)
+		local delta = Vector3.new(step.X, 0, step.Z)
+
+		for _, part in ipairs(wolf.Model:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Position = part.Position + delta
+			end
+		end
+
+		return false
+	end
+
+	-- Pick a random roam target in the forest area
+	local function getWolfRoamTarget()
+		local roamRadius = wolfConfig.RoamRadius
+		local targets = {
+			-- Near ForestPath
+			forestPos + Vector3.new(math.random(-40, 40), 0, math.random(-30, 30)),
+			-- Toward RedHouse corridor
+			GameConfig.MapPositions.RedHouse + Vector3.new(math.random(-20, 20), 0, math.random(-30, 30)),
+			-- Toward VillageCenter
+			GameConfig.MapPositions.VillageCenter + Vector3.new(math.random(-30, 30), 0, math.random(20, 60)),
+			-- Wide forest roam
+			forestPos + Vector3.new(math.random(-roamRadius, roamRadius), 0, math.random(-roamRadius / 2, roamRadius / 2)),
+		}
+		return targets[math.random(#targets)]
+	end
+
+	-- Cooldown table for wolf NPC touches
+	local wolfNPCCooldowns = {} -- [player] = tick()
+
+	-- Roam loop
+	spawn(function()
+		local groundY = wolfDef.Size.Y / 2
+		local target = getWolfRoamTarget()
+		target = Vector3.new(target.X, groundY, target.Z)
+
+		while true do
+			local dt = wait(0.1)
+			if not isRoundActive() then continue end
+
+			local arrived = moveWolf(target, dt)
+
+			if arrived then
+				wait(math.random(1, 3))
+				target = getWolfRoamTarget()
+				target = Vector3.new(target.X, groundY, target.Z)
+			end
+
+			-- Player detection
+			local now = tick()
+			for _, player in ipairs(Players:GetPlayers()) do
+				-- Skip wolf player characters
+				if getPlayerCharacter(player) == "Wolf" then continue end
+
+				local root = getPlayerRoot(player)
+				if not root then continue end
+
+				local dist = Utils.DistanceBetween(root.Position, wolf.Body.Position)
+				if dist < wolfConfig.DetectionRadius then
+					-- Check cooldown
+					if wolfNPCCooldowns[player] and now - wolfNPCCooldowns[player] < wolfConfig.TouchCooldown then
+						continue
+					end
+					wolfNPCCooldowns[player] = now
+
+					addScore(player, -wolfConfig.TouchPenalty)
+					updateHUDRemote:FireClient(player, "AbilityFeedback", {
+						Message = "The Forest Wolf got you! -" .. wolfConfig.TouchPenalty .. " points",
+					})
+				end
+			end
+		end
+	end)
+
+	-- Clean up cooldowns when players leave
+	Players.PlayerRemoving:Connect(function(player)
+		wolfNPCCooldowns[player] = nil
+	end)
+
+	print("[CharacterAbilities] Forest Wolf NPC spawned!")
 end)
 
 -- =============================

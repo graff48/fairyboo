@@ -61,13 +61,31 @@ GameConfig.Goldilocks = {
 	BearMoveSpeed = 12, -- studs per second for smooth movement
 	BearRoamRadius = 80, -- how far bears wander from their house
 	BearDetectionRadius = 10, -- catch Goldilocks within this range
+	BearTouchCooldown = 3, -- seconds before same player can be penalized again
 }
 
 -- Bear definitions (sizes and colors for the family)
 GameConfig.Bears = {
-	{Name = "Papa Bear", Size = Vector3.new(5, 7, 4), Color = BrickColor.new("Reddish brown"), HeadSize = 2.5},
-	{Name = "Mama Bear", Size = Vector3.new(4, 5.5, 3), Color = BrickColor.new("Brown"), HeadSize = 2},
-	{Name = "Baby Bear", Size = Vector3.new(2.5, 3.5, 2), Color = BrickColor.new("Nougat"), HeadSize = 1.5},
+	{Name = "Papa Bear", Size = Vector3.new(5, 7, 4), Color = BrickColor.new("Reddish brown"), HeadSize = 2.5, TouchPenalty = 60},
+	{Name = "Mama Bear", Size = Vector3.new(4, 5.5, 3), Color = BrickColor.new("Brown"), HeadSize = 2, TouchPenalty = 40},
+	{Name = "Baby Bear", Size = Vector3.new(2.5, 3.5, 2), Color = BrickColor.new("Nougat"), HeadSize = 1.5, TouchPenalty = 20},
+}
+
+-- Wolf NPC settings (forest roaming wolf)
+GameConfig.WolfNPC = {
+	MoveSpeed = 14,
+	RoamRadius = 100,
+	DetectionRadius = 5,
+	TouchPenalty = 75,
+	TouchCooldown = 3,
+}
+
+-- Wolf NPC model definition
+GameConfig.WolfNPCDef = {
+	Name = "Forest Wolf",
+	Size = Vector3.new(3, 2.5, 5),
+	Color = BrickColor.new("Dark grey"),
+	HeadSize = 1.5,
 }
 
 -- Jack settings
