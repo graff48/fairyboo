@@ -13,6 +13,7 @@ local updateHUDRemote = remotes:WaitForChild("UpdateHUD")
 local addScoreBindable = remotes:WaitForChild("AddScore")
 local getCharBindable = remotes:WaitForChild("GetPlayerCharacter")
 local isRoundActiveBindable = remotes:WaitForChild("IsRoundActive")
+local getScoreBindable = remotes:WaitForChild("GetScore")
 
 -- Helper functions
 local function addScore(player, amount)
@@ -35,6 +36,42 @@ local function getPlayerRoot(player)
 	if not char then return nil end
 	return char:FindFirstChild("HumanoidRootPart")
 end
+
+-- =============================
+-- FLAMETHROWER STATE (declared early so NPC sections can reference)
+-- =============================
+local flamethrowerHolder = nil -- {type="player", player=...} or {type="npc", npcRef=...}
+local flamethrowerPart = nil
+local npcSmokeTimers = {} -- [npcRef] = tick()
+local flamethrowerActive = false
+local lastFlamethrowerSpawnIndex = nil
+local flamethrowerVisualPart = nil -- wielded visual on holder
+_flamethrowerNPCBodies = {} -- [npcRef] = bodyPart (global so fire function can access)
+
+local function isNPCSmoked(npcRef)
+	return npcSmokeTimers[npcRef] and tick() - npcSmokeTimers[npcRef] < GameConfig.Flamethrower.NPCSmokeTime
+end
+
+local function getRandomFlamethrowerSpawn()
+	local locations = GameConfig.Flamethrower.SpawnLocations
+	local index
+	repeat
+		index = math.random(#locations)
+	until index ~= lastFlamethrowerSpawnIndex or #locations <= 1
+	lastFlamethrowerSpawnIndex = index
+	return locations[index]
+end
+
+local function removeFlamethrowerVisual()
+	if flamethrowerVisualPart and flamethrowerVisualPart.Parent then
+		flamethrowerVisualPart:Destroy()
+	end
+	flamethrowerVisualPart = nil
+end
+
+-- Forward declarations for functions defined in FLAMETHROWER section
+local spawnFlamethrower
+local fireFlamethrower
 
 -- =============================
 -- WOLF ABILITIES
@@ -526,6 +563,9 @@ spawn(function()
 			Body = body,
 			Def = bearDef,
 		})
+
+		-- Register bear body for flamethrower hit detection
+		_flamethrowerNPCBodies["bear" .. i] = body
 	end
 
 	-- Move all parts of a bear model to a new position smoothly
@@ -618,6 +658,53 @@ spawn(function()
 					end
 				end
 
+				-- NPC flamethrower pickup (bears)
+				if flamethrowerPart and flamethrowerPart.Parent and flamethrowerHolder == nil then
+					local distToFT = Utils.DistanceBetween(bear.Body.Position, flamethrowerPart.Position)
+					if distToFT < GameConfig.Flamethrower.NPCPickupRadius then
+						local bearRef = "bear" .. i
+						flamethrowerHolder = {type = "npc", npcRef = bearRef}
+						-- Hide flamethrower
+						flamethrowerPart.Transparency = 1
+						local ftPrompt = flamethrowerPart:FindFirstChildOfClass("ProximityPrompt")
+						if ftPrompt then ftPrompt.Enabled = false end
+						local ftBillboard = flamethrowerPart:FindFirstChildOfClass("BillboardGui")
+						if ftBillboard then ftBillboard.Enabled = false end
+
+						-- Fire after delay
+						delay(GameConfig.Flamethrower.NPCFireDelay, function()
+							if flamethrowerHolder and flamethrowerHolder.type == "npc" and flamethrowerHolder.npcRef == bearRef and not flamethrowerActive then
+								local nearestPlayer = nil
+								local nearestDist = math.huge
+								for _, p in ipairs(Players:GetPlayers()) do
+									local pRoot = getPlayerRoot(p)
+									if pRoot then
+										local d = Utils.DistanceBetween(bear.Body.Position, pRoot.Position)
+										if d < GameConfig.Flamethrower.NPCFireRange and d < nearestDist then
+											nearestDist = d
+											nearestPlayer = p
+										end
+									end
+								end
+
+								if nearestPlayer then
+									local pRoot = getPlayerRoot(nearestPlayer)
+									if pRoot then
+										local dir = (pRoot.Position - bear.Body.Position)
+										fireFlamethrower(bear.Body.Position, dir)
+									else
+										flamethrowerHolder = nil
+										spawnFlamethrower()
+									end
+								else
+									flamethrowerHolder = nil
+									spawnFlamethrower()
+								end
+							end
+						end)
+					end
+				end
+
 				-- Check for players nearby
 				for _, player in ipairs(Players:GetPlayers()) do
 					local root = getPlayerRoot(player)
@@ -632,6 +719,9 @@ spawn(function()
 								Message = bear.Def.Name .. " found you! Kicked out!",
 							})
 						end
+
+						-- Skip penalty if bear is smoked by flamethrower
+						if isNPCSmoked("bear" .. i) then continue end
 
 						-- Point penalty for any non-bear player on touch
 						local now = tick()
@@ -1011,6 +1101,55 @@ spawn(function()
 				target = Vector3.new(target.X, groundY, target.Z)
 			end
 
+			-- NPC flamethrower pickup
+			if flamethrowerPart and flamethrowerPart.Parent and flamethrowerHolder == nil then
+				local distToFT = Utils.DistanceBetween(wolf.Body.Position, flamethrowerPart.Position)
+				if distToFT < GameConfig.Flamethrower.NPCPickupRadius then
+					flamethrowerHolder = {type = "npc", npcRef = "wolfNPC"}
+					-- Hide flamethrower
+					flamethrowerPart.Transparency = 1
+					local ftPrompt = flamethrowerPart:FindFirstChildOfClass("ProximityPrompt")
+					if ftPrompt then ftPrompt.Enabled = false end
+					local ftBillboard = flamethrowerPart:FindFirstChildOfClass("BillboardGui")
+					if ftBillboard then ftBillboard.Enabled = false end
+
+					-- Fire after delay
+					delay(GameConfig.Flamethrower.NPCFireDelay, function()
+						if flamethrowerHolder and flamethrowerHolder.type == "npc" and flamethrowerHolder.npcRef == "wolfNPC" and not flamethrowerActive then
+							-- Find nearest player within NPCFireRange
+							local nearestPlayer = nil
+							local nearestDist = math.huge
+							for _, p in ipairs(Players:GetPlayers()) do
+								local pRoot = getPlayerRoot(p)
+								if pRoot then
+									local d = Utils.DistanceBetween(wolf.Body.Position, pRoot.Position)
+									if d < GameConfig.Flamethrower.NPCFireRange and d < nearestDist then
+										nearestDist = d
+										nearestPlayer = p
+									end
+								end
+							end
+
+							if nearestPlayer then
+								local pRoot = getPlayerRoot(nearestPlayer)
+								if pRoot then
+									local dir = (pRoot.Position - wolf.Body.Position)
+									fireFlamethrower(wolf.Body.Position, dir)
+								else
+									-- No valid target, drop flamethrower
+									flamethrowerHolder = nil
+									spawnFlamethrower()
+								end
+							else
+								-- No player in range, drop flamethrower
+								flamethrowerHolder = nil
+								spawnFlamethrower()
+							end
+						end
+					end)
+				end
+			end
+
 			-- Player detection
 			local now = tick()
 			for _, player in ipairs(Players:GetPlayers()) do
@@ -1022,6 +1161,9 @@ spawn(function()
 
 				local dist = Utils.DistanceBetween(root.Position, wolf.Body.Position)
 				if dist < wolfConfig.DetectionRadius then
+					-- Skip penalty if wolf NPC is smoked by flamethrower
+					if isNPCSmoked("wolfNPC") then continue end
+
 					-- Check cooldown
 					if wolfNPCCooldowns[player] and now - wolfNPCCooldowns[player] < wolfConfig.TouchCooldown then
 						continue
@@ -1042,7 +1184,285 @@ spawn(function()
 		wolfNPCCooldowns[player] = nil
 	end)
 
+	-- Register wolf NPC body for flamethrower hit detection
+	_flamethrowerNPCBodies["wolfNPC"] = wolf.Body
+
 	print("[CharacterAbilities] Forest Wolf NPC spawned!")
+end)
+
+-- =============================
+-- FLAMETHROWER (continued — functions)
+-- =============================
+
+fireFlamethrower = function(origin, direction)
+	flamethrowerActive = true
+
+	local flameConfig = GameConfig.Flamethrower
+	local range = flameConfig.FlameRange
+	local width = flameConfig.FlameWidth
+
+	-- Normalize direction on flat plane
+	local flatDir = Vector3.new(direction.X, 0, direction.Z)
+	if flatDir.Magnitude < 0.01 then
+		flatDir = Vector3.new(0, 0, -1)
+	end
+	flatDir = flatDir.Unit
+
+	-- Create flame visual parts in a cone
+	local flameParts = {}
+	for i = 1, 7 do
+		local dist = (i / 7) * range
+		local spread = (i / 7) * (width / 2)
+		local lateralOffset = (math.random() - 0.5) * spread * 2
+		local rightVec = Vector3.new(flatDir.Z, 0, -flatDir.X)
+		local pos = origin + flatDir * dist + rightVec * lateralOffset + Vector3.new(0, 1 + math.random() * 2, 0)
+
+		local flamePart = Utils.CreatePart({
+			Name = "FlamePart",
+			Size = Vector3.new(2 + i * 0.5, 1 + i * 0.3, 2 + i * 0.5),
+			Position = pos,
+			BrickColor = (i % 2 == 0) and BrickColor.new("Bright orange") or BrickColor.new("Bright red"),
+			Material = Enum.Material.Neon,
+			CanCollide = false,
+			Transparency = 0.3,
+			Parent = workspace,
+		})
+		table.insert(flameParts, flamePart)
+	end
+
+	-- Hit detection - players
+	local shooterPlayer = nil
+	if flamethrowerHolder and flamethrowerHolder.type == "player" then
+		shooterPlayer = flamethrowerHolder.player
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player == shooterPlayer then continue end
+		local root = getPlayerRoot(player)
+		if not root then continue end
+
+		local toPlayer = root.Position - origin
+		local flatToPlayer = Vector3.new(toPlayer.X, 0, toPlayer.Z)
+		local distAlongDir = flatToPlayer:Dot(flatDir)
+
+		if distAlongDir > 0 and distAlongDir <= range then
+			local perpendicular = (flatToPlayer - flatDir * distAlongDir).Magnitude
+			local allowedWidth = (distAlongDir / range) * width
+			if perpendicular <= allowedWidth / 2 then
+				-- Hit! Zero their score
+				local currentScore = getScoreBindable:Invoke(player)
+				if currentScore > 0 then
+					addScore(player, -currentScore)
+				end
+				updateHUDRemote:FireClient(player, "AbilityFeedback", {
+					Message = "Hit by flamethrower! All points lost!",
+				})
+				if shooterPlayer then
+					updateHUDRemote:FireClient(shooterPlayer, "AbilityFeedback", {
+						Message = "Direct hit on " .. player.Name .. "!",
+					})
+				end
+			end
+		end
+	end
+
+	-- Hit detection - NPCs (wolf and bears)
+	-- We'll check all NPC bodies stored in _flamethrowerNPCBodies (populated after NPC creation)
+	if _flamethrowerNPCBodies then
+		for npcRef, npcBody in pairs(_flamethrowerNPCBodies) do
+			if not npcBody or not npcBody.Parent then continue end
+			local toNPC = npcBody.Position - origin
+			local flatToNPC = Vector3.new(toNPC.X, 0, toNPC.Z)
+			local distAlongDir = flatToNPC:Dot(flatDir)
+
+			if distAlongDir > 0 and distAlongDir <= range then
+				local perpendicular = (flatToNPC - flatDir * distAlongDir).Magnitude
+				local allowedWidth = (distAlongDir / range) * width
+				if perpendicular <= allowedWidth / 2 then
+					-- Apply smoke effect
+					npcSmokeTimers[npcRef] = tick()
+
+					-- Create smoke visual parts on NPC
+					local smokeParts = {}
+					for s = 1, 4 do
+						local smokePart = Utils.CreatePart({
+							Name = "SmokePart",
+							Size = Vector3.new(1.5, 1.5, 1.5),
+							Position = npcBody.Position + Vector3.new(
+								(math.random() - 0.5) * 3,
+								math.random() * 3 + 1,
+								(math.random() - 0.5) * 3
+							),
+							BrickColor = BrickColor.new("Dark grey"),
+							Material = Enum.Material.SmoothPlastic,
+							Transparency = 0.5,
+							CanCollide = false,
+							Shape = Enum.PartType.Ball,
+							Parent = npcBody.Parent, -- parent to NPC model
+						})
+						table.insert(smokeParts, smokePart)
+					end
+
+					-- Remove smoke after NPCSmokeTime
+					delay(flameConfig.NPCSmokeTime, function()
+						for _, sp in ipairs(smokeParts) do
+							if sp and sp.Parent then
+								sp:Destroy()
+							end
+						end
+						-- Clear timer if it hasn't been refreshed
+						if npcSmokeTimers[npcRef] and tick() - npcSmokeTimers[npcRef] >= flameConfig.NPCSmokeTime then
+							npcSmokeTimers[npcRef] = nil
+						end
+					end)
+				end
+			end
+		end
+	end
+
+	-- Clean up flame visuals after FlameLifetime
+	delay(flameConfig.FlameLifetime, function()
+		for _, fp in ipairs(flameParts) do
+			if fp and fp.Parent then
+				fp:Destroy()
+			end
+		end
+	end)
+
+	-- Remove wielded visual and reset state
+	removeFlamethrowerVisual()
+	flamethrowerHolder = nil
+	flamethrowerActive = false
+
+	-- Respawn flamethrower at new location
+	spawnFlamethrower()
+end
+
+local function playerPickup(player)
+	if flamethrowerHolder ~= nil then return end
+
+	flamethrowerHolder = {type = "player", player = player}
+
+	-- Hide flamethrower part
+	if flamethrowerPart then
+		flamethrowerPart.Transparency = 1
+		local prompt = flamethrowerPart:FindFirstChildOfClass("ProximityPrompt")
+		if prompt then
+			prompt.Enabled = false
+		end
+		local billboard = flamethrowerPart:FindFirstChildOfClass("BillboardGui")
+		if billboard then
+			billboard.Enabled = false
+		end
+	end
+
+	-- Weld a small visual to the player's right arm
+	local character = player.Character
+	if character then
+		local rightArm = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand") or character:FindFirstChild("RightUpperArm")
+		local attachTo = rightArm or character:FindFirstChild("HumanoidRootPart")
+		if attachTo then
+			local visual = Instance.new("Part")
+			visual.Name = "FlamethrowerVisual"
+			visual.Size = Vector3.new(0.6, 0.6, 2.5)
+			visual.BrickColor = BrickColor.new("Bright orange")
+			visual.Material = Enum.Material.Neon
+			visual.CanCollide = false
+			visual.Massless = true
+			visual:SetAttribute("Costume", true)
+			visual.CFrame = attachTo.CFrame * CFrame.new(0, -0.5, -1.5)
+
+			local weld = Instance.new("Weld")
+			weld.Part0 = attachTo
+			weld.Part1 = visual
+			weld.C0 = CFrame.new(0, -0.5, -1.5)
+			weld.Parent = visual
+
+			visual.Parent = character
+			flamethrowerVisualPart = visual
+		end
+	end
+
+	updateHUDRemote:FireClient(player, "AbilityFeedback", {
+		Message = "You picked up the Flamethrower! Click to fire!",
+	})
+end
+
+spawnFlamethrower = function()
+	-- Destroy old part
+	if flamethrowerPart and flamethrowerPart.Parent then
+		flamethrowerPart:Destroy()
+	end
+	flamethrowerPart = nil
+
+	local pos = getRandomFlamethrowerSpawn()
+
+	local part = Utils.CreatePart({
+		Name = "Flamethrower",
+		Size = Vector3.new(2, 1, 4),
+		Position = pos,
+		BrickColor = BrickColor.new("Bright orange"),
+		Material = Enum.Material.Neon,
+		CanCollide = false,
+		Parent = workspace,
+	})
+
+	Utils.CreateBillboardGui(part, "Flamethrower", Color3.fromRGB(255, 140, 0))
+
+	local prompt = Utils.CreateProximityPrompt(part, "Pick Up Flamethrower", 0, GameConfig.Flamethrower.PickupRadius)
+	prompt.Triggered:Connect(function(triggerPlayer)
+		playerPickup(triggerPlayer)
+	end)
+
+	flamethrowerPart = part
+	print("[Flamethrower] Spawned at " .. tostring(pos))
+end
+
+-- Player fire trigger
+abilityRemote.OnServerEvent:Connect(function(player, action)
+	if action == "UseFlamethrower" then
+		if not flamethrowerHolder or flamethrowerHolder.type ~= "player" or flamethrowerHolder.player ~= player then
+			return
+		end
+		if flamethrowerActive then return end
+
+		local root = getPlayerRoot(player)
+		if not root then return end
+
+		local lookVector = root.CFrame.LookVector
+		fireFlamethrower(root.Position, lookVector)
+	end
+end)
+
+-- Spawn flamethrower when map is ready (will be called from the wolf/bear spawn blocks too for NPC registration)
+spawn(function()
+	wait(6) -- Wait for map and NPCs to be created
+	spawnFlamethrower()
+
+	-- Round reset monitoring for flamethrower
+	local wasActive = false
+	while true do
+		wait(1)
+		local active = isRoundActive()
+		if active and not wasActive then
+			npcSmokeTimers = {}
+			flamethrowerHolder = nil
+			flamethrowerActive = false
+			removeFlamethrowerVisual()
+			spawnFlamethrower()
+		end
+		wasActive = active
+	end
+end)
+
+-- Clean up if holder leaves
+Players.PlayerRemoving:Connect(function(player)
+	if flamethrowerHolder and flamethrowerHolder.type == "player" and flamethrowerHolder.player == player then
+		removeFlamethrowerVisual()
+		flamethrowerHolder = nil
+		flamethrowerActive = false
+		spawnFlamethrower()
+	end
 end)
 
 -- =============================

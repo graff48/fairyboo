@@ -393,6 +393,13 @@ isRoundActiveBindable.OnInvoke = function()
 end
 isRoundActiveBindable.Parent = remotes
 
+local getScoreBindable = Instance.new("BindableFunction")
+getScoreBindable.Name = "GetScore"
+getScoreBindable.OnInvoke = function(player)
+	return getScore(player)
+end
+getScoreBindable.Parent = remotes
+
 -- Round timer tick (runs inside game loop below)
 
 -- Main game loop
