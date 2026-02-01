@@ -58,6 +58,16 @@ GameConfig.Goldilocks = {
 	BearReturnInterval = 45,
 	BearPatrolDuration = 15,
 	HideSpotCount = 3,
+	BearMoveSpeed = 12, -- studs per second for smooth movement
+	BearRoamRadius = 80, -- how far bears wander from their house
+	BearDetectionRadius = 10, -- catch Goldilocks within this range
+}
+
+-- Bear definitions (sizes and colors for the family)
+GameConfig.Bears = {
+	{Name = "Papa Bear", Size = Vector3.new(5, 7, 4), Color = BrickColor.new("Reddish brown"), HeadSize = 2.5},
+	{Name = "Mama Bear", Size = Vector3.new(4, 5.5, 3), Color = BrickColor.new("Brown"), HeadSize = 2},
+	{Name = "Baby Bear", Size = Vector3.new(2.5, 3.5, 2), Color = BrickColor.new("Nougat"), HeadSize = 1.5},
 }
 
 -- Jack settings
