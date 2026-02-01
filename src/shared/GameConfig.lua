@@ -96,6 +96,28 @@ GameConfig.Jack = {
 	GiantDetectionRadius = 25,
 }
 
+-- Flamethrower settings
+GameConfig.Flamethrower = {
+	PickupRadius = 8,
+	NPCPickupRadius = 6,
+	FlameRange = 40,
+	FlameWidth = 8,
+	FlameLifetime = 1.5,
+	NPCSmokeTime = 30,
+	NPCFireDelay = 2,
+	NPCFireRange = 25,
+	SpawnLocations = {
+		Vector3.new(-80, 1, -45),   -- Near StrawHouse
+		Vector3.new(0, 1, -65),     -- Near StickHouse
+		Vector3.new(80, 1, -45),    -- Near BrickHouse
+		Vector3.new(-30, 1, 80),    -- Forest area 1
+		Vector3.new(30, 1, 80),     -- Forest area 2
+		Vector3.new(0, 1, 120),     -- Deep forest
+		Vector3.new(-120, 1, 85),   -- Near RedHouse
+		Vector3.new(120, 1, 85),    -- Near GrandmaHouse
+	},
+}
+
 -- Character max slots
 GameConfig.MaxSlots = {
 	Wolf = 1,

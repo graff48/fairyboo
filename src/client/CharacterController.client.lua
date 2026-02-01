@@ -49,6 +49,11 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	-- E key abilities are handled by ProximityPrompts on the server
 	-- F key abilities (Pig barricade, Goldilocks hide) are also ProximityPrompt-based
 
+	-- Mouse click (MB1) to fire flamethrower
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		abilityRemote:FireServer("UseFlamethrower")
+	end
+
 	-- Additional client-side feedback could be added here
 	-- For example, showing a channel bar when holding E
 end)
